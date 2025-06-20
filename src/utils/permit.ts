@@ -46,6 +46,7 @@ export async function createPermitSignature(
     };
 
     // Get EIP-712 signature (ethers v5)
+    //@ts-ignore
     const eip712Signature = await signer._signTypedData(domain, types, message);
     const eip712Split = ethers.utils.splitSignature(eip712Signature);
 

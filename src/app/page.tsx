@@ -168,7 +168,7 @@ export default function Home() {
         params: [{ chainId: `0x${CHAIN_INFO[CHAIN_SLUGS.EVMX].id.toString(16)}` }],
       });
 
-      const provider = new ethers.providers.BrowserProvider(window.ethereum);
+      const provider = new ethers.providers.Web3Provider(window.ethereum);
       const signer = await provider.getSigner();
 
       // Get app gateway contract
