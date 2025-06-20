@@ -27,7 +27,7 @@ export default function Home() {
       if (!tokenAddress || !selectedChain) return;
 
       // Validate address format
-      if (!ethers.isAddress(tokenAddress)) {
+      if (!ethers.utils.isAddress(tokenAddress)) {
         setError('Invalid token address format');
         setTokenInfo(null);
         return;
@@ -123,12 +123,12 @@ export default function Home() {
         );
         console.log('superTokenAddress', superTokenAddress, chain.id);
         superTokenAddresses[chain.id] = superTokenAddress;
-        if (superTokenAddress === ethers.ZeroAddress) {
+        if (superTokenAddress === ethers.constants.AddressZero) {
           allAddressesFound = false;
         }
       }
 
-      if (vaultAddress !== ethers.ZeroAddress && allAddressesFound) {
+      if (vaultAddress !== ethers.constants.AddressZero && allAddressesFound) {
         console.log('deployedContracts', {
           vaultAddress,
           superTokenAddresses,
@@ -168,7 +168,7 @@ export default function Home() {
         params: [{ chainId: `0x${CHAIN_INFO[CHAIN_SLUGS.EVMX].id.toString(16)}` }],
       });
 
-      const provider = new ethers.BrowserProvider(window.ethereum);
+      const provider = new ethers.providers.BrowserProvider(window.ethereum);
       const signer = await provider.getSigner();
 
       // Get app gateway contract

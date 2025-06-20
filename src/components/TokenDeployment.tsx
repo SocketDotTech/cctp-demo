@@ -50,7 +50,7 @@ export default function TokenDeployment({
   const checkWalletConnection = async () => {
     if (typeof window !== 'undefined' && window.ethereum) {
       try {
-        const provider = new ethers.BrowserProvider(window.ethereum);
+        const provider = new ethers.providers.Web3Provider(window.ethereum);
         const accounts = await provider.listAccounts();
         setIsWalletConnected(accounts.length > 0);
       } catch (err) {
@@ -68,35 +68,16 @@ export default function TokenDeployment({
         throw new Error('Please install MetaMask to continue');
       }
 
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      await provider.send('eth_requestAccounts', []);
-      
-      // Add the selected chain to MetaMask if not already added
-      try {
-        await window.ethereum.request({
-          method: 'wallet_switchEthereumChain',
-          params: [{ chainId: `0x${selectedChain.chainId.toString(16)}` }],
-        });
-      } catch (switchError: any) {
-        if (switchError.code === 4902) {
-          await window.ethereum.request({
-            method: 'wallet_addEthereumChain',
-            params: [
-              {
-                chainId: `0x${selectedChain.chainId.toString(16)}`,
-                chainName: selectedChain.name,
-                nativeCurrency: selectedChain.nativeCurrency,
-                rpcUrls: [selectedChain.rpc],
-              },
-            ],
-          });
-        } else {
-          throw switchError;
-        }
-      }
+      const accounts = await window.ethereum.request({
+        method: 'eth_requestAccounts',
+      });
 
-      setIsWalletConnected(true);
+      if (accounts.length > 0) {
+        setIsWalletConnected(true);
+        setError(null);
+      }
     } catch (err: any) {
+      console.error('Error connecting wallet:', err);
       setError(err.message || 'Failed to connect wallet');
     }
   };
@@ -141,7 +122,7 @@ export default function TokenDeployment({
         }
       }
 
-      const provider = new ethers.BrowserProvider(window.ethereum);
+      const provider = new ethers.providers.Web3Provider(window.ethereum);
       const signer = await provider.getSigner();
       const appGateway = new ethers.Contract(
         process.env.NEXT_PUBLIC_APP_GATEWAY_ADDRESS!,
@@ -154,8 +135,8 @@ export default function TokenDeployment({
         name_: tokenInfo.name,
         symbol_: tokenInfo.symbol,
         decimals_: tokenInfo.decimals,
-        initialSupplyHolder_: await signer.getAddress(),
-        initialSupply_: ethers.parseUnits('1000000', tokenInfo.decimals), // 1M tokens
+        initialSupplyHolder_: (await provider.listAccounts())[0],
+        initialSupply_: ethers.utils.parseUnits('1000000', tokenInfo.decimals), // 1M tokens
       };
 
       // Get chain slugs for selected destination chains
@@ -205,7 +186,7 @@ export default function TokenDeployment({
                 superTokenAddresses[chainId] = superTokenAddress;
               }
 
-              if (vaultAddress !== ethers.ZeroAddress) {
+              if (vaultAddress !== ethers.constants.AddressZero) {
                 setDeployedAddresses({
                   vault: vaultAddress,
                   superTokens: superTokenAddresses,

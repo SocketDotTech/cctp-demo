@@ -11,10 +11,10 @@ export default function WalletIndicator() {
     const checkConnection = async () => {
       if (typeof window !== 'undefined' && window.ethereum) {
         try {
-          const provider = new ethers.BrowserProvider(window.ethereum);
+          const provider = new ethers.providers.Web3Provider(window.ethereum);
           const accounts = await provider.listAccounts();
           if (accounts.length > 0) {
-            setAddress(accounts[0].address.toString());
+            setAddress(accounts[0]);
           }
         } catch (err) {
           console.error('Error checking wallet connection:', err);
@@ -48,7 +48,7 @@ export default function WalletIndicator() {
 
     setIsConnecting(true);
     try {
-      const provider = new ethers.BrowserProvider(window.ethereum);
+      const provider = new ethers.providers.Web3Provider(window.ethereum);
       const accounts = await provider.send('eth_requestAccounts', []);
       setAddress(accounts[0].toString());
     } catch (err) {

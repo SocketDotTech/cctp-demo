@@ -1,5 +1,3 @@
-
-
 export const APP_GATEWAY_ABI = [
 
 	{
@@ -102,7 +100,77 @@ export const APP_GATEWAY_ABI = [
 		"inputs": [],
 		"outputs": [{ "name": "", "type": "bytes32", "internalType": "bytes32" }],
 		"stateMutability": "view"
-	}
+	},
+	{
+		"type": "function",
+		"name": "transferWithPermit",
+		"inputs": [
+			{
+				"name": "order",
+				"type": "tuple",
+				"internalType": "struct CCTPSuperTokenAppGateway.PermitTransferOrder",
+				"components": [
+					{
+						"name": "sourceChainSlug",
+						"type": "uint32",
+						"internalType": "uint32"
+					},
+					{
+						"name": "dstChainSlug",
+						"type": "uint32",
+						"internalType": "uint32"
+					},
+					{
+						"name": "srcToken",
+						"type": "address",
+						"internalType": "address"
+					},
+					{
+						"name": "dstToken",
+						"type": "address",
+						"internalType": "address"
+					},
+					{
+						"name": "user",
+						"type": "address",
+						"internalType": "address"
+					},
+					{
+						"name": "srcAmount",
+						"type": "uint256",
+						"internalType": "uint256"
+					},
+					{
+						"name": "deadline",
+						"type": "uint256",
+						"internalType": "uint256"
+					},
+					{
+						"name": "permitDeadline",
+						"type": "uint256",
+						"internalType": "uint256"
+					},
+					{
+						"name": "v",
+						"type": "uint8",
+						"internalType": "uint8"
+					},
+					{
+						"name": "r",
+						"type": "bytes32",
+						"internalType": "bytes32"
+					},
+					{
+						"name": "s",
+						"type": "bytes32",
+						"internalType": "bytes32"
+					}
+				]
+			}
+		],
+		"outputs": [],
+		"stateMutability": "nonpayable"
+	},
 ]
 
 
@@ -155,4 +223,75 @@ export const ERC20_ABI = [
     outputs: [{ name: '', type: 'uint256' }],
     type: 'function',
   },
-]; 
+  {
+    constant: true,
+    inputs: [{ name: 'owner', type: 'address' }],
+    name: 'nonces',
+    outputs: [{ name: '', type: 'uint256' }],
+    type: 'function',
+  },
+  {
+    constant: true,
+    inputs: [],
+    name: 'DOMAIN_SEPARATOR',
+    outputs: [{ name: '', type: 'bytes32' }],
+    type: 'function',
+  },
+  {
+    constant: false,
+    inputs: [
+      { name: 'owner', type: 'address' },
+      { name: 'spender', type: 'address' },
+      { name: 'value', type: 'uint256' },
+      { name: 'deadline', type: 'uint256' },
+      { name: 'v', type: 'uint8' },
+      { name: 'r', type: 'bytes32' },
+      { name: 's', type: 'bytes32' }
+    ],
+    name: 'permit',
+    outputs: [],
+    type: 'function',
+  },
+];
+
+export const PERMIT_HELPER_ABI = [
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "token",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "owner",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "spender",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "value",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "deadline",
+        "type": "uint256"
+      }
+    ],
+    "name": "getSuperTokenPermitHash",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  }
+];

@@ -79,8 +79,8 @@ export enum CHAIN_SLUGS {
   
   
   export const providers = {
-    [CHAIN_SLUGS.EVMX]: new ethers.JsonRpcProvider(process.env.NEXT_PUBLIC_DEV_EVMX_RPC!),
-    [CHAIN_SLUGS.ARBITRUM_SEPOLIA]: new ethers.JsonRpcProvider(process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC!),
-    [CHAIN_SLUGS.OPTIMISM_SEPOLIA]: new ethers.JsonRpcProvider(process.env.NEXT_PUBLIC_OPTIMISM_SEPOLIA_RPC!),
-    [CHAIN_SLUGS.BASE_SEPOLIA]: new ethers.JsonRpcProvider(process.env.NEXT_PUBLIC_BASE_SEPOLIA_RPC!),
+    [CHAIN_SLUGS.EVMX]: new ethers.providers.JsonRpcProvider(process.env.NEXT_PUBLIC_DEV_EVMX_RPC!),
+    [CHAIN_SLUGS.ARBITRUM_SEPOLIA]: new ethers.providers.JsonRpcProvider(process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC!),
+    [CHAIN_SLUGS.OPTIMISM_SEPOLIA]: new ethers.providers.JsonRpcProvider(process.env.NEXT_PUBLIC_OPTIMISM_SEPOLIA_RPC!),
+    [CHAIN_SLUGS.BASE_SEPOLIA]: new ethers.providers.JsonRpcProvider(process.env.NEXT_PUBLIC_BASE_SEPOLIA_RPC!),
   }

@@ -15,6 +15,7 @@ import {
 	CCTP_DOMAINS,
 } from "@/constants";
 import { getOnChainAddress } from "@/utils/contracts";
+import { createPermitSignature } from "@/utils/permit";
 
 interface TokenTransferProps {
 	tokenInfo: TokenInfo;
@@ -37,12 +38,10 @@ export default function TokenTransfer({
 	const [selectedDestinationChain, setSelectedDestinationChain] =
 		useState<Chain | null>(null);
 	const [amount, setAmount] = useState("");
-	const [isApproving, setIsApproving] = useState(false);
+	const [isSigningPermit, setIsSigningPermit] = useState(false);
 	const [isTransferring, setIsTransferring] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [txHash, setTxHash] = useState<string | null>(null);
-	const [allowance, setAllowance] = useState<string>("0");
-	const [isCheckingAllowance, setIsCheckingAllowance] = useState(false);
 	const [balance, setBalance] = useState<string>("0");
 	const [isCheckingContracts, setIsCheckingContracts] = useState(false);
 	const [deployedAddresses, setDeployedAddresses] = useState<{
@@ -50,7 +49,7 @@ export default function TokenTransfer({
 		superTokenAddresses: { [chainId: number]: string };
 	} | null>(null);
 	const [isDeploying, setIsDeploying] = useState(false);
-	const [approvalTxHash, setApprovalTxHash] = useState<string | null>(null);
+	const [permitSignature, setPermitSignature] = useState<{ v: number; r: string; s: string, deadline: number } | null>(null);
 	const [transferTxHash, setTransferTxHash] = useState<string | null>(null);
 	const [transferStatus, setTransferStatus] = useState<any>(null);
 	const [isPollingStatus, setIsPollingStatus] = useState(false);
@@ -72,16 +71,17 @@ export default function TokenTransfer({
 	}, [selectedDestinationChain]);
 
 	useEffect(() => {
-		const fetchBalanceAndAllowance = async () => {
+		const fetchBalance = async () => {
 			if (!window.ethereum || !selectedChain || !tokenInfo) {
 				console.error("Missing required parameters", selectedChain, tokenInfo);
 				return;
 			}
 
 			try {
-				const provider = new ethers.BrowserProvider(window.ethereum);
+				const provider = new ethers.providers.Web3Provider(window.ethereum);
 				const signer = await provider.getSigner();
-				const address = await signer.getAddress();
+				const accounts = await provider.listAccounts();
+				const address = accounts[0];
 
 				// Get token contract
 				const tokenContract = new ethers.Contract(
@@ -97,37 +97,39 @@ export default function TokenTransfer({
 					sourceProvider
 				);
 				const balance = await chainTokenContract.balanceOf(address);
-				setBalance(Number(ethers.formatUnits(balance, tokenInfo.decimals)).toFixed(2));
-
-				console.log("selectedChain.id", selectedChain.id);
-				console.log("tokenInfo.chainId", tokenInfo.chainId);
-				// Only check allowance if we're on the source chain (where token is deployed)
-				if (selectedChain.id === tokenInfo.chainId) {
-					const vaultAddress = await getOnChainAddress(
-						VAULT_CONTRACT_ID,
-						selectedChain.id
-					);
-					console.log("vaultAddress", vaultAddress);
-					if (vaultAddress !== ethers.ZeroAddress) {
-						const allowance = await chainTokenContract.allowance(
-							address,
-							vaultAddress
-						);
-						console.log("allowance", allowance);
-						setAllowance(Number(ethers.formatUnits(allowance, tokenInfo.decimals)).toFixed(2));
-					} else {
-						setAllowance("0.00");
-					}
-				} else {
-					setAllowance("0.00");
-				}
+				setBalance(Number(ethers.utils.formatUnits(balance, tokenInfo.decimals)).toFixed(2));
 			} catch (err) {
-				console.error("Error fetching balance and allowance:", err);
+				console.error("Error fetching balance:", err);
 			}
 		};
 
-		fetchBalanceAndAllowance();
-	}, [amount, selectedChain, tokenInfo]);
+		fetchBalance();
+	}, [selectedChain, tokenInfo]);
+
+	// Reset permit signature when amount changes
+	useEffect(() => {
+		setPermitSignature(null);
+	}, [amount]);
+
+	// Function to determine why transfer button is disabled
+	const getTransferButtonError = () => {
+		if (isTransferring) return "Transfer in progress...";
+		if (!isWalletConnected) return "Please connect your wallet";
+		if (!amount) return "Please enter an amount";
+		if (Number(amount) <= 0) return "Amount must be greater than 0";
+		if (Number(amount) > Number(balance)) return "Insufficient balance";
+		if (selectedChain.id === tokenInfo?.chainId && !permitSignature) return "Please sign permit first";
+		if (!selectedChain) return "Please select a source chain";
+		if (!selectedDestinationChain) return "Please select a destination chain";
+		if (!tokenInfo) return "Token information not available";
+		if (!deployedContracts) return "Contracts not deployed";
+		if (isPollingStatus) return "Checking transfer status...";
+		return null; // Button should be enabled
+	};
+
+	const isTransferButtonDisabled = () => {
+		return getTransferButtonError() !== null;
+	};
 
 	const checkDeployedContracts = async () => {
 		if (!selectedChain || !selectedDestinationChain) return;
@@ -149,8 +151,8 @@ export default function TokenTransfer({
 			);
 
 			if (
-				vaultAddress !== ethers.ZeroAddress &&
-				superTokenAddress !== ethers.ZeroAddress
+				vaultAddress !== ethers.constants.AddressZero &&
+				superTokenAddress !== ethers.constants.AddressZero
 			) {
 				setDeployedAddresses({
 					vault: vaultAddress,
@@ -170,6 +172,68 @@ export default function TokenTransfer({
 		}
 	};
 
+	const handlePermit = async () => {
+		if (!window.ethereum || !selectedChain || !tokenInfo) return;
+
+		setIsSigningPermit(true);
+		setError(null);
+		setPermitSignature(null);
+
+		try {
+			// Use the provider from chains.ts to read data (no network switch needed)
+			const sourceProvider = providers[selectedChain.id as keyof typeof providers];
+			const walletProvider = new ethers.providers.Web3Provider(window.ethereum);
+			const accounts = await walletProvider.listAccounts();
+			const userAddress = accounts[0];
+
+			// Get vault address
+			const vaultAddress = await getOnChainAddress(
+				VAULT_CONTRACT_ID,
+				selectedChain.id
+			);
+
+			if (vaultAddress === ethers.constants.AddressZero) {
+				throw new Error('Vault not deployed on source chain');
+			}
+
+			// Create token contract instance using the source chain provider
+			const tokenContract = new ethers.Contract(
+				tokenInfo.address,
+				ERC20_ABI,
+				sourceProvider
+			);
+
+			// Create permit signature using the source chain provider for reading
+			const deadline = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
+			const value = ethers.utils.parseUnits(amount, tokenInfo.decimals);
+
+			// Now switch to source chain for signing
+			await window.ethereum.request({
+				method: 'wallet_switchEthereumChain',
+				params: [{ chainId: `0x${selectedChain.id.toString(16)}` }],
+			});
+
+			const signer = await new ethers.providers.Web3Provider(window.ethereum).getSigner();
+
+			const { v, r, s } = await createPermitSignature(
+				tokenContract,
+				userAddress,
+				vaultAddress,
+				value,
+				deadline,
+				signer
+			);
+
+			setPermitSignature({ v, r, s, deadline });	
+			console.log('Permit signature created:', { v, r, s });
+		} catch (err: any) {
+			console.error('Error signing permit:', err);
+			setError(err.message || 'Failed to sign permit');
+		} finally {
+			setIsSigningPermit(false);
+		}
+	};
+
 	const handleDeployContracts = async () => {
 		if (!selectedChain || !selectedDestinationChain) return;
 		if (!window.ethereum) {
@@ -181,7 +245,7 @@ export default function TokenTransfer({
 		setError(null);
 
 		try {
-			const provider = new ethers.BrowserProvider(window.ethereum);
+			const provider = new ethers.providers.Web3Provider(window.ethereum);
 			const signer = await provider.getSigner();
 
 			// Create contract instances
@@ -214,8 +278,8 @@ export default function TokenTransfer({
 					);
 
 					if (
-						vaultAddress !== ethers.ZeroAddress &&
-						superTokenAddress !== ethers.ZeroAddress
+						vaultAddress !== ethers.constants.AddressZero &&
+						superTokenAddress !== ethers.constants.AddressZero
 					) {
 						setDeployedAddresses({
 							vault: vaultAddress,
@@ -251,7 +315,7 @@ export default function TokenTransfer({
 	const checkWalletConnection = async () => {
 		if (typeof window !== "undefined" && window.ethereum) {
 			try {
-				const provider = new ethers.BrowserProvider(window.ethereum);
+				const provider = new ethers.providers.Web3Provider(window.ethereum);
 				const accounts = await provider.listAccounts();
 				setIsWalletConnected(accounts.length > 0);
 			} catch (err) {
@@ -280,107 +344,6 @@ export default function TokenTransfer({
 		}
 	};
 
-	const checkAllowance = async () => {
-		if (!isWalletConnected || !window.ethereum) {
-			setError("Please connect your wallet first");
-			return;
-		}
-
-		// Only check allowance if we're on the source chain
-		if (selectedChain.chainId !== selectedDestinationChain?.chainId) {
-			setAllowance("0");
-			return;
-		}
-
-		setIsCheckingAllowance(true);
-		setError(null);
-
-		try {
-			const provider = new ethers.BrowserProvider(window.ethereum);
-			const signer = await provider.getSigner();
-			const userAddress = await signer.getAddress();
-
-			// Create contract instance for the token
-			const tokenContract = new ethers.Contract(
-				tokenInfo.address,
-				ERC20_ABI,
-				signer
-			);
-
-			try {
-				const currentAllowance = await tokenContract.allowance(
-					userAddress,
-					deployedContracts.vaultAddress
-				);
-				setAllowance(ethers.formatUnits(currentAllowance, tokenInfo.decimals));
-			} catch (err: any) {
-				console.error("Error checking allowance:", err);
-				// If the contract doesn't exist or returns empty data, set allowance to 0
-				setAllowance("0");
-			}
-		} catch (err: any) {
-			setError(err.message || "Failed to check allowance");
-		} finally {
-			setIsCheckingAllowance(false);
-		}
-	};
-
-	const handleApprove = async () => {
-		if (!window.ethereum || !selectedChain || !tokenInfo) return;
-
-		setIsApproving(true);
-		setError(null);
-		setApprovalTxHash(null);
-
-		try {
-			// Switch to source chain before approving
-			await window.ethereum.request({
-				method: 'wallet_switchEthereumChain',
-				params: [{ chainId: `0x${selectedChain.id.toString(16)}` }],
-			});
-
-			const provider = new ethers.BrowserProvider(window.ethereum);
-			const signer = await provider.getSigner();
-
-			// Get vault address
-			const vaultAddress = await getOnChainAddress(
-				VAULT_CONTRACT_ID,
-				selectedChain.id
-			);
-
-			if (vaultAddress === ethers.ZeroAddress) {
-				throw new Error('Vault not deployed on source chain');
-			}
-
-			// Create token contract instance
-			const tokenContract = new ethers.Contract(
-				tokenInfo.address,
-				ERC20_ABI,
-				signer
-			);
-
-			// Approve token
-			const tx = await tokenContract.approve(
-				vaultAddress,
-				ethers.MaxUint256
-			);
-			setApprovalTxHash(tx.hash);
-			await tx.wait();
-
-			// Refresh allowance with proper formatting
-			const newAllowance = await tokenContract.allowance(
-				await signer.getAddress(),
-				vaultAddress
-			);
-			setAllowance(Number(ethers.formatUnits(newAllowance, tokenInfo.decimals)).toFixed(2));
-		} catch (err: any) {
-			console.error('Error approving token:', err);
-			setError(err.message || 'Failed to approve token');
-		} finally {
-			setIsApproving(false);
-		}
-	};
-
 	const handleTransfer = async () => {
 		if (
 			!selectedChain ||
@@ -397,21 +360,28 @@ export default function TokenTransfer({
 			return;
 		}
 
+		// Check if we have permit signature for source chain
+		if (selectedChain.id === tokenInfo.chainId && !permitSignature) {
+			setError("Permit signature required for source chain transfer");
+			return;
+		}
+
 		setIsTransferring(true);
 		setError(null);
 		setTransferTxHash(null);
 		setTransferStatus(null);
 
 		try {
-			// Switch to EVMX chain
+			// Switch to EVMX chain for transfer
 			await window.ethereum.request({
 				method: 'wallet_switchEthereumChain',
 				params: [{ chainId: `0x${CHAIN_INFO[CHAIN_SLUGS.EVMX].id.toString(16)}` }],
 			});
 
-			const provider = new ethers.BrowserProvider(window.ethereum);
+			const provider = new ethers.providers.Web3Provider(window.ethereum);
 			const signer = await provider.getSigner();
-			const userAddress = await signer.getAddress();
+			const accounts = await provider.listAccounts();
+			const userAddress = accounts[0];
 
 			// Get app gateway contract
 			const appGateway = new ethers.Contract(
@@ -442,6 +412,9 @@ export default function TokenTransfer({
 				dstToken = tokenInfo.address;
 			}
 
+			// Common deadline for all operations
+			const deadline = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
+
 			// Create transfer order
 			const transferOrder = {
 				sourceChainSlug: selectedChain.id,
@@ -449,31 +422,59 @@ export default function TokenTransfer({
 				srcToken,
 				dstToken,
 				user: userAddress,
-				srcAmount: ethers.parseUnits(amount, tokenInfo.decimals),
-				deadline: Math.floor(Date.now() / 1000) + 1000000 // Convert to seconds and add 1000000
+				srcAmount: ethers.utils.parseUnits(amount, tokenInfo.decimals),
+				deadline
 			};
 
-			console.log("transferOrder", transferOrder);
-			// Encode the order
-			const encodedOrder = ethers.AbiCoder.defaultAbiCoder().encode(
-				[
-					'tuple(uint32 sourceChainSlug, uint32 dstChainSlug, address srcToken, address dstToken, address user, uint256 srcAmount, uint256 deadline)'
-				],
-				[transferOrder]
-			);
+			let txHash: string; // Declare txHash variable to capture the transaction hash
 
-			console.log("encodedOrder", encodedOrder);
-			// Send transfer transaction
-			const tx = await appGateway.transfer(encodedOrder);
-			setTransferTxHash(tx.hash);
-			await tx.wait();
+			// If we're on the source chain, use transferWithPermit
+			if (selectedChain.id === tokenInfo.chainId && permitSignature) {
+				// Create PermitTransferOrder with permit data
+				const permitTransferOrder = {
+					...transferOrder,
+					permitDeadline: permitSignature.deadline,
+					v: permitSignature.v,
+					r: permitSignature.r,
+					s: permitSignature.s
+				};
+
+				console.log("permitTransferOrder", permitTransferOrder);
+				
+				// Send transferWithPermit transaction
+				const tx = await appGateway.transferWithPermit(permitTransferOrder);
+				txHash = tx.hash; // Capture the transaction hash
+				console.log("txHash", txHash);
+				setTransferTxHash(txHash);
+				await tx.wait();
+			} else {
+				// Use regular transfer for non-source chains
+				console.log("transferOrder", transferOrder);
+				
+				// Encode the order
+					const encodedOrder = ethers.utils.defaultAbiCoder.encode(
+					[
+						'tuple(uint32 sourceChainSlug, uint32 dstChainSlug, address srcToken, address dstToken, address user, uint256 srcAmount, uint256 deadline)'
+					],
+					[transferOrder]
+				);
+
+				console.log("encodedOrder", encodedOrder);
+				
+				// Send transfer transaction
+				const tx = await appGateway.transfer(encodedOrder);
+				txHash = tx.hash; // Capture the transaction hash
+				console.log("txHash", txHash);
+				setTransferTxHash(txHash);
+				await tx.wait();
+			}
 
 			// Start polling for transfer status
 			setIsPollingStatus(true);
 			const pollInterval = setInterval(async () => {
 				try {
-					console.log(process.env.NEXT_PUBLIC_DEV_API_URL);
-					const response = await fetch(`${process.env.NEXT_PUBLIC_DEV_API_URL}/dev/getDetailsByTxHash?txHash=${tx.hash}`);
+					console.log(process.env.NEXT_PUBLIC_DEV_API_URL, txHash);
+					const response = await fetch(`${process.env.NEXT_PUBLIC_DEV_API_URL}/dev/getDetailsByTxHash?txHash=${txHash}`);
 					const data = await response.json();
 					
 					if (data.status === "SUCCESS" && data.response && data.response.length > 0) {
@@ -566,12 +567,17 @@ export default function TokenTransfer({
 					{/* Amount Input */}
 					<div className="space-y-4">
 						<div>
-							<label
-								htmlFor="amount"
-								className="block text-sm font-medium text-gray-700 mb-2"
-							>
-								Amount
-							</label>
+							<div className="flex justify-between items-center mb-2 max-w-md">
+								<label
+									htmlFor="amount"
+									className="block text-sm font-medium text-gray-700"
+								>
+									Amount
+								</label>
+								<div className="text-sm text-gray-600">
+									<span className="font-medium">Balance:</span> {balance} {tokenInfo?.symbol}
+								</div>
+							</div>
 							<div className="max-w-md">
 								<input
 									type="number"
@@ -588,20 +594,7 @@ export default function TokenTransfer({
 
 						{amount && (
 							<div className="bg-gray-50 p-4 rounded-lg space-y-2">
-								<p className="text-sm text-gray-600">
-									<span className="font-medium">Your Balance:</span> {balance} {tokenInfo?.symbol}
-								</p>
-								{selectedChain.id === tokenInfo?.chainId && (
-									<>
-										<p className="text-sm text-gray-600">
-											<span className="font-medium">Current Allowance:</span> {allowance} {tokenInfo?.symbol}
-										</p>
-										{Number(amount) > Number(allowance) && (
-											<p className="text-yellow-600 text-sm font-medium">⚠️ Approval required</p>
-										)}
-									</>
-								)}
-								{Number(amount) > Number(balance) && (
+								{selectedChain.id === tokenInfo?.chainId && Number(amount) > Number(balance) && (
 									<p className="text-red-600 text-sm font-medium">❌ Insufficient balance</p>
 								)}
 							</div>
@@ -610,57 +603,38 @@ export default function TokenTransfer({
 
 					{/* Action Buttons */}
 					<div className="flex flex-col space-y-3">
-						{selectedChain.id === tokenInfo?.chainId && 
-						 Number(amount) > Number(allowance) && (
-							<>
-								<button
-									onClick={handleApprove}
-									disabled={isApproving || !isWalletConnected}
-									className="w-full bg-primary text-white py-3 px-4 rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors"
-								>
-									{isApproving ? 'Approving...' : 'Approve Token'}
-								</button>
-								{approvalTxHash && (
-									<div className="text-sm text-gray-600 bg-blue-50 p-3 rounded-lg">
-										<span className="font-medium">Approval Transaction:</span>{' '}
-										{selectedChain.explorerUrl ? (
-											<a
-												href={`${selectedChain.explorerUrl}/tx/${approvalTxHash}`}
-												target="_blank"
-												rel="noopener noreferrer"
-												className="text-primary hover:underline"
-											>
-												{approvalTxHash}
-											</a>
-										) : (
-											<span className="font-mono">{approvalTxHash}</span>
-										)}
-									</div>
-								)}
-							</>
+						{selectedChain.id === tokenInfo?.chainId && !permitSignature && (
+							<button
+								onClick={handlePermit}
+								disabled={isSigningPermit || !isWalletConnected || !amount || Number(amount) <= 0 || Number(amount) > Number(balance)}
+								className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+							>
+								{isSigningPermit ? 'Signing Permit...' : 'Sign Permit'}
+							</button>
+						)}
+
+						{permitSignature && (
+							<div className="text-sm text-gray-600 bg-green-50 p-3 rounded-lg">
+								<span className="font-medium">✅ Permit Signed:</span> Ready for transfer
+							</div>
 						)}
 
 						<button
 							onClick={handleTransfer}
-							disabled={
-								isTransferring ||
-								!isWalletConnected ||
-								!amount ||
-								Number(amount) <= 0 ||
-								Number(amount) > Number(balance) ||
-								(selectedChain.id === tokenInfo?.chainId && Number(amount) > Number(allowance)) ||
-								!selectedChain ||
-								!selectedDestinationChain ||
-								!tokenInfo ||
-								!deployedContracts ||
-								isPollingStatus
-							}
+							disabled={isTransferButtonDisabled()}
 							className={`w-full bg-primary text-white py-3 px-4 rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-all duration-300 ${
 								isPollingStatus ? 'opacity-50' : ''
 							}`}
 						>
 							{isTransferring ? 'Transferring...' : 'Transfer Token'}
 						</button>
+						
+						{/* Show why transfer button is disabled */}
+						{isTransferButtonDisabled() && (
+							<div className="text-sm text-amber-600 bg-amber-50 p-3 rounded-lg border border-amber-200">
+								<span className="font-medium">⚠️ Transfer not available:</span> {getTransferButtonError()}
+							</div>
+						)}
 					</div>
 
 					{/* Transfer Status */}
